@@ -458,29 +458,47 @@ export class DartRenderer extends ConvenienceRenderer {
         );
     }
 
+    protected isEnumType(t: Type): boolean {
+        return matchType<boolean>(
+            t,
+            _anyType => false,
+            _nullType => false,
+            _boolType => false,
+            _integerType => false,
+            _doubleType => false,
+            _stringType => false,
+            _arrayType => false,
+            _classType => false,
+            _mapType => false,
+            _enumType => true,
+            _unionType => false,
+            _transformedStringType => false
+        );
+    }
+
     protected toMapList(itemType: Sourcelike, list: Sourcelike, mapper: Sourcelike): Sourcelike {
-        return ["List<", itemType, ">.from(", list, ".map((x) => ", mapper, "))"];
+        return ["List<", itemType, ">.from(", list, ".map<dynamic>((x) => ", mapper, "))"];
     }
     protected toMapMap(valueType: Sourcelike, map: Sourcelike, valueMapper: Sourcelike): Sourcelike {
-        return ["Map.from(", map, ").map((k, v) => MapEntry<String, ", valueType, ">(k, ", valueMapper, "))"];
+        return ["Map<String, dynamic>.from(", map, ").map<String, dynamic>((k, dynamic v) => MapEntry<String, ", valueType, ">(k, ", valueMapper, "))"];
     }
 
 
     protected fromMapList(itemType: Sourcelike, list: Sourcelike): Sourcelike {
         return ["List<", itemType, ">.from(", list, ")"];
-        // return ["List<", itemType, ">.from(", list, " as List<dynamic>"];
     }
+
     protected fromMapCompositeList(itemType: Sourcelike, list: Sourcelike, casting: Sourcelike): Sourcelike {
         return ["List<", itemType, ">.from((", list, ")", casting, ")"];
-        // return ["List<", itemType, ">.from(", list, " as List<dynamic>"];
+    }
+
+    protected fromMapCompositeMap(itemType: Sourcelike, list: Sourcelike, casting: Sourcelike): Sourcelike {
+        return ["Map<String, dynamic>.from(", list, ")", casting, ")"];
     }
 
     protected fromMapMap(valueType: Sourcelike, map: Sourcelike): Sourcelike {
-        // return ["Map<String, ", valueType, ">.from(", map, ") as Map<String, dynamic>"];
         return ["Map<String, ", valueType, ">.from(", map, ")"];
     }
-
-
 
     protected fromDynamicExpression(t: Type, ...dynamic: Sourcelike[]): Sourcelike {
         return matchType<Sourcelike>(
@@ -504,8 +522,17 @@ export class DartRenderer extends ConvenienceRenderer {
                 }
             },
             classType => [this.nameForNamedType(classType), ".", this.fromJson, "(", dynamic, ")"],
-            mapType =>
-                this.fromMapMap(this.dartType(mapType.values), dynamic),
+            mapType => {
+                const isCompoositeList = this.isCompositeCollection(mapType);
+                if (isCompoositeList) {
+                    const typeString = this.dartType(mapType.values);
+                    const casting: Sourcelike = [
+                        ".cast<String, Map<String, dynamic>>().map((key, value) => MapEntry(key, ", typeString, ".fromJson(value))"]
+                    return this.fromMapCompositeMap(this.dartType(mapType.values), dynamic, casting);
+                } else {
+                    return this.fromMapMap(this.dartType(mapType.values), dynamic);
+                }
+            },
             enumType => [defined(this._enumValues.get(enumType)), ".map[", dynamic, "]"],
             unionType => {
                 const maybeNullable = nullableFromUnion(unionType);
@@ -627,7 +654,7 @@ export class DartRenderer extends ConvenienceRenderer {
                     className,
                     ".",
                     this.fromJson,
-                    "(json.decode(str));"
+                    "(json.decode(str) as Map<String, dynamic>);"
                 );
 
                 this.ensureBlankLine();
@@ -644,11 +671,14 @@ export class DartRenderer extends ConvenienceRenderer {
             this.emitLine("factory ", className, ".", this.fromJson, "(Map<String, dynamic> json) => ", className, "(");
             this.indent(() => {
                 this.forEachClassProperty(c, "none", (name, jsonName, property) => {
+                    const needsCasting = !this.isEnumType(property.type)
+                    const castString = needsCasting ? [' as ', this.dartTypeGen(property.type)] : ''
+
                     this.emitLine(
                         name,
                         ": ",
                         // this.fromDynamicExpression(property.type, 'json["', stringEscape(jsonName), '"]'),
-                        this.fromDynamicExpression(property.type, 'json["', stringEscape(jsonName), '"] as ', this.dartTypeGen(property.type)),
+                        this.fromDynamicExpression(property.type, 'json["', stringEscape(jsonName), '"]', castString),
                         ","
                     );
                 });
@@ -657,7 +687,7 @@ export class DartRenderer extends ConvenienceRenderer {
 
             this.ensureBlankLine();
 
-            this.emitLine("Map<String, dynamic> ", this.toJson, "() => {");
+            this.emitLine("Map<String, dynamic> ", this.toJson, "() => <String, dynamic>{");
             this.indent(() => {
                 this.forEachClassProperty(c, "none", (name, jsonName, property) => {
                     this.emitLine(
@@ -754,7 +784,7 @@ export class DartRenderer extends ConvenienceRenderer {
                     " ",
                     decoder,
                     "(String str) => ",
-                    this.fromDynamicExpression(t, "json.decode(str)"),
+                    this.fromDynamicExpression(t, "json.decode(str) as Map<String, dynamic>"),
                     ";"
                 );
 
