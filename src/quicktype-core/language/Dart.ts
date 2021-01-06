@@ -186,8 +186,8 @@ function dartNameStyle(startWithUpper: boolean, upperUnderscore: boolean, origin
     const firstWordStyle = upperUnderscore
         ? allUpperWordStyle
         : startWithUpper
-        ? firstUpperWordStyle
-        : allLowerWordStyle;
+            ? firstUpperWordStyle
+            : allLowerWordStyle;
     const restWordStyle = upperUnderscore ? allUpperWordStyle : firstUpperWordStyle;
     return combineWords(
         words,
@@ -384,13 +384,103 @@ export class DartRenderer extends ConvenienceRenderer {
         );
     }
 
-    protected mapList(itemType: Sourcelike, list: Sourcelike, mapper: Sourcelike): Sourcelike {
-        return ["List<", itemType, ">.from(", list, ".map((x) => ", mapper, "))"];
+    protected dartTypeGen(t: Type, withIssues: boolean = false): Sourcelike {
+        return matchType<Sourcelike>(
+            t,
+            _anyType => maybeAnnotated(withIssues, anyTypeIssueAnnotation, "dynamic"),
+            _nullType => maybeAnnotated(withIssues, nullTypeIssueAnnotation, "dynamic"),
+            _boolType => "bool",
+            _integerType => "int",
+            _doubleType => "double",
+            _stringType => "String",
+            _arrayType => "List<dynamic>",
+            _classType => "Map<String, dynamic>",
+            _mapType => "Map<String, dynamic>",
+            enumType => this.nameForNamedType(enumType),
+            unionType => {
+                const maybeNullable = nullableFromUnion(unionType);
+                if (maybeNullable === null) {
+                    return "dynamic";
+                }
+                return this.dartType(maybeNullable, withIssues);
+            },
+            transformedStringType => {
+                switch (transformedStringType.kind) {
+                    case "date-time":
+                    case "date":
+                        return "DateTime";
+                    default:
+                        return "String";
+                }
+            }
+        );
     }
 
-    protected mapMap(valueType: Sourcelike, map: Sourcelike, valueMapper: Sourcelike): Sourcelike {
+    protected isCompositeCollection(t: Type): boolean {
+        return matchType<boolean>(
+            t,
+            _anyType => false,
+            _nullType => false,
+            _boolType => false,
+            _integerType => false,
+            _doubleType => false,
+            _stringType => false,
+            arrayType => {
+                const holdsClassType = this.isClassType(arrayType.items)
+                return holdsClassType;
+            },
+            _classType => true,
+            mapType => {
+                const holdsClassType = this.isClassType(mapType.values)
+                return holdsClassType;
+            },
+            _enumType => false,
+            _unionType => false,
+            _transformedStringType => false
+        );
+    }
+
+    protected isClassType(t: Type): boolean {
+        return matchType<boolean>(
+            t,
+            _anyType => false,
+            _nullType => false,
+            _boolType => false,
+            _integerType => false,
+            _doubleType => false,
+            _stringType => false,
+            _arrayType => false,
+            _classType => true,
+            _mapType => false,
+            _enumType => false,
+            _unionType => false,
+            _transformedStringType => false
+        );
+    }
+
+    protected toMapList(itemType: Sourcelike, list: Sourcelike, mapper: Sourcelike): Sourcelike {
+        return ["List<", itemType, ">.from(", list, ".map((x) => ", mapper, "))"];
+    }
+    protected toMapMap(valueType: Sourcelike, map: Sourcelike, valueMapper: Sourcelike): Sourcelike {
         return ["Map.from(", map, ").map((k, v) => MapEntry<String, ", valueType, ">(k, ", valueMapper, "))"];
     }
+
+
+    protected fromMapList(itemType: Sourcelike, list: Sourcelike): Sourcelike {
+        return ["List<", itemType, ">.from(", list, ")"];
+        // return ["List<", itemType, ">.from(", list, " as List<dynamic>"];
+    }
+    protected fromMapCompositeList(itemType: Sourcelike, list: Sourcelike, casting: Sourcelike): Sourcelike {
+        return ["List<", itemType, ">.from((", list, ")", casting, ")"];
+        // return ["List<", itemType, ">.from(", list, " as List<dynamic>"];
+    }
+
+    protected fromMapMap(valueType: Sourcelike, map: Sourcelike): Sourcelike {
+        // return ["Map<String, ", valueType, ">.from(", map, ") as Map<String, dynamic>"];
+        return ["Map<String, ", valueType, ">.from(", map, ")"];
+    }
+
+
 
     protected fromDynamicExpression(t: Type, ...dynamic: Sourcelike[]): Sourcelike {
         return matchType<Sourcelike>(
@@ -399,13 +489,23 @@ export class DartRenderer extends ConvenienceRenderer {
             _nullType => dynamic, // FIXME: check null
             _boolType => dynamic,
             _integerType => dynamic,
-            _doubleType => [dynamic, ".toDouble()"],
+            _doubleType => dynamic,
             _stringType => dynamic,
-            arrayType =>
-                this.mapList(this.dartType(arrayType.items), dynamic, this.fromDynamicExpression(arrayType.items, "x")),
+            arrayType => {
+                const isCompoositeList = this.isCompositeCollection(arrayType);
+                if (isCompoositeList) {
+                    const typeString = this.dartType(arrayType.items);
+                    const casting: Sourcelike = [
+                        ".cast<Map<String, dynamic>>().map<", typeString, ">((x) => ", typeString, ".fromJson(x))"]
+                    return this.fromMapCompositeList(this.dartType(arrayType.items), dynamic, casting);
+                } else {
+
+                    return this.fromMapList(this.dartType(arrayType.items), dynamic);
+                }
+            },
             classType => [this.nameForNamedType(classType), ".", this.fromJson, "(", dynamic, ")"],
             mapType =>
-                this.mapMap(this.dartType(mapType.values), dynamic, this.fromDynamicExpression(mapType.values, "v")),
+                this.fromMapMap(this.dartType(mapType.values), dynamic),
             enumType => [defined(this._enumValues.get(enumType)), ".map[", dynamic, "]"],
             unionType => {
                 const maybeNullable = nullableFromUnion(unionType);
@@ -435,9 +535,9 @@ export class DartRenderer extends ConvenienceRenderer {
             _integerType => dynamic,
             _doubleType => dynamic,
             _stringType => dynamic,
-            arrayType => this.mapList("dynamic", dynamic, this.toDynamicExpression(arrayType.items, "x")),
+            arrayType => this.toMapList("dynamic", dynamic, this.toDynamicExpression(arrayType.items, "x")),
             _classType => [dynamic, ".", this.toJson, "()"],
-            mapType => this.mapMap("dynamic", dynamic, this.toDynamicExpression(mapType.values, "v")),
+            mapType => this.toMapMap("dynamic", dynamic, this.toDynamicExpression(mapType.values, "v")),
             enumType => [defined(this._enumValues.get(enumType)), ".reverse[", dynamic, "]"],
             unionType => {
                 const maybeNullable = nullableFromUnion(unionType);
@@ -547,7 +647,8 @@ export class DartRenderer extends ConvenienceRenderer {
                     this.emitLine(
                         name,
                         ": ",
-                        this.fromDynamicExpression(property.type, 'json["', stringEscape(jsonName), '"]'),
+                        // this.fromDynamicExpression(property.type, 'json["', stringEscape(jsonName), '"]'),
+                        this.fromDynamicExpression(property.type, 'json["', stringEscape(jsonName), '"] as ', this.dartTypeGen(property.type)),
                         ","
                     );
                 });
