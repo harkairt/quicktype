@@ -539,6 +539,7 @@ export class DartRenderer extends ConvenienceRenderer {
                 if (maybeNullable === null) {
                     return dynamic;
                 }
+                // json["solutionOptionId"] as String
                 return [dynamic, " == null ? null : ", this.fromDynamicExpression(maybeNullable, dynamic)];
             },
             transformedStringType => {
@@ -778,6 +779,17 @@ export class DartRenderer extends ConvenienceRenderer {
         if (!this._options.justTypes && !this._options.codersInClass) {
             this.forEachTopLevel("leading-and-interposing", (t, name) => {
                 const { encoder, decoder } = defined(this._topLevelDependents.get(name));
+
+                // this.emitLine(
+                //     this.dartType(t),
+                //     " ",
+                //     mapper,
+                //     "(Map<String, dynamic> map) => ",
+                //     this.fromDynamicExpression(t, "map"),
+                //     ";"
+                // );
+
+                this.ensureBlankLine();
 
                 this.emitLine(
                     this.dartType(t),
