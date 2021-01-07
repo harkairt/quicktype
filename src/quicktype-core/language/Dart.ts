@@ -492,6 +492,23 @@ export class DartRenderer extends ConvenienceRenderer {
             _transformedStringType => false
         );
     }
+    protected isDoubleType(t: Type): boolean {
+        return matchType<boolean>(
+            t,
+            _anyType => false,
+            _nullType => false,
+            _boolType => false,
+            _integerType => false,
+            _doubleType => true,
+            _stringType => false,
+            _arrayType => false,
+            _classType => false,
+            _mapType => false,
+            _enumType => false,
+            _unionType => false,
+            _transformedStringType => false
+        );
+    }
 
     protected isPrimitiveType(t: Type): boolean {
         return matchType<boolean>(
@@ -576,15 +593,11 @@ export class DartRenderer extends ConvenienceRenderer {
             unionType => {
                 const maybeNullable = nullableFromUnion(unionType);
                 if (maybeNullable === null) {
-                    //List<int>.from(json["reward"] as List<dynamic>)
                     return [dynamic];
                 }
-                // return [dynamic, " == null ? null : ", this.fromDynamicExpression(maybeNullable, true, dynamic), " as ", this.dartType(maybeNullable)];
                 const needsCasting = this.isPrimitiveType(maybeNullable)
                 const castString: Sourcelike = needsCasting ? [" as ", this.dartType(maybeNullable)] : ""
                 return [dynamic, " == null ? null : ", this.fromDynamicExpression(maybeNullable, true, dynamic), castString];
-                // return [dynamic, " == null ? null : ", this.fromDynamicExpression(maybeNullable, dynamic)];
-                // json["reward"] as List<int> == null ? null : List<int>.from(json["reward"] as List<int>)
             },
             transformedStringType => {
                 switch (transformedStringType.kind) {
@@ -719,12 +732,22 @@ export class DartRenderer extends ConvenienceRenderer {
                     const needsCasting = !this.isEnumType(property.type) && !this.isUnionType(property.type)
                     const castString = needsCasting ? [' as ', this.dartTypeGen(property.type)] : ''
 
-                    this.emitLine(
-                        name,
-                        ": ",
-                        this.fromDynamicExpression(property.type, false, 'json["', stringEscape(jsonName), '"]', castString),
-                        ","
-                    );
+                    const isDouble = this.isDoubleType(property.type)
+                    if (isDouble) {
+                        this.emitLine(
+                            name,
+                            ": ",
+                            this.fromDynamicExpression(property.type, false, '(json["', stringEscape(jsonName), '"] as num).toDouble()'),
+                            ","
+                        );
+                    } else {
+                        this.emitLine(
+                            name,
+                            ": ",
+                            this.fromDynamicExpression(property.type, false, 'json["', stringEscape(jsonName), '"]', castString),
+                            ","
+                        );
+                    }
                 });
             });
             this.emitLine(");");
