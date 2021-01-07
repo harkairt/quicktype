@@ -8,7 +8,7 @@ import {
     PrimitiveStringTypeKind
 } from "../Type";
 import { matchType, nullableFromUnion, directlyReachableSingleNamedType } from "../TypeUtils";
-import { Sourcelike, maybeAnnotated, modifySource } from "../Source";
+import { Sourcelike, maybeAnnotated, modifySource, Source } from "../Source";
 import {
     utf16LegalizeCharacters,
     escapeNonPrintableMapper,
@@ -471,7 +471,42 @@ export class DartRenderer extends ConvenienceRenderer {
             _classType => false,
             _mapType => false,
             _enumType => true,
-            _unionType => false,
+            _unionType => true,
+            _transformedStringType => false
+        );
+    }
+    protected isUnionType(t: Type): boolean {
+        return matchType<boolean>(
+            t,
+            _anyType => false,
+            _nullType => false,
+            _boolType => false,
+            _integerType => false,
+            _doubleType => false,
+            _stringType => false,
+            _arrayType => false,
+            _classType => false,
+            _mapType => false,
+            _enumType => false,
+            _unionType => true,
+            _transformedStringType => false
+        );
+    }
+
+    protected isPrimitiveType(t: Type): boolean {
+        return matchType<boolean>(
+            t,
+            _anyType => false,
+            _nullType => false,
+            _boolType => true,
+            _integerType => true,
+            _doubleType => true,
+            _stringType => true,
+            _arrayType => false,
+            _classType => false,
+            _mapType => false,
+            _enumType => false,
+            _unionType => true,
             _transformedStringType => false
         );
     }
@@ -484,23 +519,23 @@ export class DartRenderer extends ConvenienceRenderer {
     }
 
 
-    protected fromMapList(itemType: Sourcelike, list: Sourcelike): Sourcelike {
-        return ["List<", itemType, ">.from(", list, ")"];
+    protected fromMapList(itemType: Sourcelike, list: Sourcelike, castAsGeneric: boolean = false): Sourcelike {
+        return ["List<", itemType, ">.from(", list, castAsGeneric ? " as List<dynamic>)" : ")"];
     }
 
     protected fromMapCompositeList(itemType: Sourcelike, list: Sourcelike, casting: Sourcelike): Sourcelike {
         return ["List<", itemType, ">.from((", list, ")", casting, ")"];
     }
 
-    protected fromMapCompositeMap(itemType: Sourcelike, list: Sourcelike, casting: Sourcelike): Sourcelike {
-        return ["Map<String, dynamic>.from(", list, ")", casting, ")"];
+    protected fromMapCompositeMap(itemType: Sourcelike, list: Sourcelike, casting: Sourcelike, innerCasting: Sourcelike): Sourcelike {
+        return ["Map<String, dynamic>.from(", list, innerCasting, ")", casting, ")"];
     }
 
-    protected fromMapMap(valueType: Sourcelike, map: Sourcelike): Sourcelike {
-        return ["Map<String, ", valueType, ">.from(", map, ")"];
+    protected fromMapMap(valueType: Sourcelike, map: Sourcelike, castAsGeneric: boolean = false): Sourcelike {
+        return ["Map<String, ", valueType, ">.from(", map, castAsGeneric ? " as Map<String, dynamic>)" : ")"];
     }
 
-    protected fromDynamicExpression(t: Type, ...dynamic: Sourcelike[]): Sourcelike {
+    protected fromDynamicExpression(t: Type, castAsGeneric: boolean = false, ...dynamic: Sourcelike[]): Sourcelike {
         return matchType<Sourcelike>(
             t,
             _anyType => dynamic,
@@ -510,37 +545,46 @@ export class DartRenderer extends ConvenienceRenderer {
             _doubleType => dynamic,
             _stringType => dynamic,
             arrayType => {
-                const isCompoositeList = this.isCompositeCollection(arrayType);
-                if (isCompoositeList) {
+                const isCompoositeCollectioh = this.isCompositeCollection(arrayType);
+                if (isCompoositeCollectioh) {
                     const typeString = this.dartType(arrayType.items);
                     const casting: Sourcelike = [
                         ".cast<Map<String, dynamic>>().map<", typeString, ">((x) => ", typeString, ".fromJson(x))"]
                     return this.fromMapCompositeList(this.dartType(arrayType.items), dynamic, casting);
                 } else {
-
-                    return this.fromMapList(this.dartType(arrayType.items), dynamic);
+                    return this.fromMapList(this.dartType(arrayType.items), dynamic, castAsGeneric);
                 }
             },
-            classType => [this.nameForNamedType(classType), ".", this.fromJson, "(", dynamic, ")"],
+            classType => {
+                const castString: Sourcelike = castAsGeneric ? [" as Map<String, dynamic>"] : ""
+                return [this.nameForNamedType(classType), ".", this.fromJson, "(", dynamic, castString, ")"];
+            },
             mapType => {
-                const isCompoositeList = this.isCompositeCollection(mapType);
-                if (isCompoositeList) {
+                const isCompoositeCollectioh = this.isCompositeCollection(mapType);
+                if (isCompoositeCollectioh) {
                     const typeString = this.dartType(mapType.values);
                     const casting: Sourcelike = [
                         ".cast<String, Map<String, dynamic>>().map((key, value) => MapEntry(key, ", typeString, ".fromJson(value))"]
-                    return this.fromMapCompositeMap(this.dartType(mapType.values), dynamic, casting);
+                    const castString: Sourcelike = castAsGeneric ? [" as Map<String, dynamic>"] : ""
+
+                    return this.fromMapCompositeMap(this.dartType(mapType.values), dynamic, casting, castString);
                 } else {
-                    return this.fromMapMap(this.dartType(mapType.values), dynamic);
+                    return this.fromMapMap(this.dartType(mapType.values), dynamic, castAsGeneric);
                 }
             },
             enumType => [defined(this._enumValues.get(enumType)), ".map[", dynamic, "]"],
             unionType => {
                 const maybeNullable = nullableFromUnion(unionType);
                 if (maybeNullable === null) {
-                    return dynamic;
+                    //List<int>.from(json["reward"] as List<dynamic>)
+                    return [dynamic];
                 }
-                // json["solutionOptionId"] as String
-                return [dynamic, " == null ? null : ", this.fromDynamicExpression(maybeNullable, dynamic)];
+                // return [dynamic, " == null ? null : ", this.fromDynamicExpression(maybeNullable, true, dynamic), " as ", this.dartType(maybeNullable)];
+                const needsCasting = this.isPrimitiveType(maybeNullable)
+                const castString: Sourcelike = needsCasting ? [" as ", this.dartType(maybeNullable)] : ""
+                return [dynamic, " == null ? null : ", this.fromDynamicExpression(maybeNullable, true, dynamic), castString];
+                // return [dynamic, " == null ? null : ", this.fromDynamicExpression(maybeNullable, dynamic)];
+                // json["reward"] as List<int> == null ? null : List<int>.from(json["reward"] as List<int>)
             },
             transformedStringType => {
                 switch (transformedStringType.kind) {
@@ -672,14 +716,13 @@ export class DartRenderer extends ConvenienceRenderer {
             this.emitLine("factory ", className, ".", this.fromJson, "(Map<String, dynamic> json) => ", className, "(");
             this.indent(() => {
                 this.forEachClassProperty(c, "none", (name, jsonName, property) => {
-                    const needsCasting = !this.isEnumType(property.type)
+                    const needsCasting = !this.isEnumType(property.type) && !this.isUnionType(property.type)
                     const castString = needsCasting ? [' as ', this.dartTypeGen(property.type)] : ''
 
                     this.emitLine(
                         name,
                         ": ",
-                        // this.fromDynamicExpression(property.type, 'json["', stringEscape(jsonName), '"]'),
-                        this.fromDynamicExpression(property.type, 'json["', stringEscape(jsonName), '"]', castString),
+                        this.fromDynamicExpression(property.type, false, 'json["', stringEscape(jsonName), '"]', castString),
                         ","
                     );
                 });
@@ -796,7 +839,7 @@ export class DartRenderer extends ConvenienceRenderer {
                     " ",
                     decoder,
                     "(String str) => ",
-                    this.fromDynamicExpression(t, "json.decode(str) as Map<String, dynamic>"),
+                    this.fromDynamicExpression(t, false, "json.decode(str) as Map<String, dynamic>"),
                     ";"
                 );
 
